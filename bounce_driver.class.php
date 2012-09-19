@@ -92,9 +92,9 @@ class BounceHandler{
         $this->head_hash = $this->parse_head($head);
 
         // parse the email into data structures
-        $boundary = $this->head_hash['Content-type']['boundary'];
+        $boundary = isset($this->head_hash['Content-type']) && isset($this->head_hash['Content-type']['boundary']) ? $this->head_hash['Content-type']['boundary'] : null;
         $mime_sections = $this->parse_body_into_mime_sections($body, $boundary);
-        $this->body_hash = split("\r\n", $body);
+        $this->body_hash = explode("\r\n", $body);
         $this->first_body_hash = $this->parse_head($mime_sections['first_body_part']);
 
         $this->looks_like_a_bounce = $this->is_a_bounce();
@@ -142,7 +142,7 @@ class BounceHandler{
             //  Busted Exim MTA
             //  Up to 50 email addresses can be listed on each header.
             //  There can be multiple X-Failed-Recipients: headers. - (not supported)
-            $arrFailed = split(',', $this->head_hash['X-failed-recipients']);
+            $arrFailed = explode(',', $this->head_hash['X-failed-recipients']);
             for($j=0; $j<count($arrFailed); $j++){
                 $this->output[$j]['recipient'] = trim($arrFailed[$j]);
                 $this->output[$j]['status'] = $this->get_status_code_from_text($this->output[$j]['recipient'],0);
@@ -183,7 +183,7 @@ class BounceHandler{
         $this->status = $this->output[0]['status'];
         $this->subject = ($this->subject) ? $this->subject : $this->head_hash['Subject'];
         $this->recipient = $this->output[0]['recipient'];
-        $this->feedback_type = ($this->fbl_hash['Feedback-type']) ? $this->fbl_hash['Feedback-type'] : "";
+        $this->feedback_type = !empty($this->fbl_hash['Feedback-type']) ? $this->fbl_hash['Feedback-type'] : "";
 
         // sniff out any web beacons
         if($this->web_beacon_preg_1)
@@ -354,14 +354,14 @@ class BounceHandler{
     function is_RFC1892_multipart_report(){
         return $this->head_hash['Content-type']['type']=='multipart/report'
            &&  $this->head_hash['Content-type']['report-type']=='delivery-status'
-           && $this->head_hash['Content-type'][boundary]!=='';
+           && $this->head_hash['Content-type']['boundary']!=='';
     }
 
     function parse_head($headers){
         if(!is_array($headers)) $headers = explode("\r\n", $headers);
         $hash = $this->standard_parser($headers);
         // get a little more complex
-        $arrRec = explode('|', $hash['Received']);
+        $arrRec = empty($hash['Received']) ? array() : explode('|', $hash['Received']);
         $hash['Received']= $arrRec;
         if($hash['Content-type']){//preg_match('/Multipart\/Report/i', $hash['Content-type'])){
             $multipart_report = explode (';', $hash['Content-type']);
@@ -394,13 +394,14 @@ class BounceHandler{
         // receives email head as array of lines
         // simple parse (Entity: value\n)
         if(!is_array($content)) $content = explode("\r\n", $content);
+        $entity = null;
         foreach($content as $line){
             if(preg_match('/([^\s.]*):\s(.*)/', $line, $array)){
                 $entity = ucfirst(strtolower($array[1]));
                 if(empty($hash[$entity])){
                     $hash[$entity] = trim($array[2]);
                 }
-                else if($hash['Received']){
+                else if(!empty($hash['Received'])){
                     // grab extra Received headers :(
                     // pile it on with pipe delimiters,
                     // oh well, SMTP is broken in this way
@@ -423,13 +424,13 @@ class BounceHandler{
         $hash = $this->parse_dsn_fields($str);
         $hash['mime_header'] = $this->standard_parser($hash['mime_header']);
         $hash['per_message'] = $this->standard_parser($hash['per_message']);
-        if($hash['per_message']['X-postfix-sender']){
+        if(!empty($hash['per_message']['X-postfix-sender'])){
             $arr = explode (';', $hash['per_message']['X-postfix-sender']);
             $hash['per_message']['X-postfix-sender']='';
             $hash['per_message']['X-postfix-sender']['type'] = trim($arr[0]);
             $hash['per_message']['X-postfix-sender']['addr'] = trim($arr[1]);
         }
-        if($hash['per_message']['Reporting-mta']){
+        if(!empty($hash['per_message']['Reporting-mta'])){
             $arr = explode (';', $hash['per_message']['Reporting-mta']);
             $hash['per_message']['Reporting-mta']='';
             $hash['per_message']['Reporting-mta']['type'] = trim($arr[0]);
@@ -442,11 +443,11 @@ class BounceHandler{
             $temp['Final-recipient'] = $this->format_final_recipient_array($arr);
             //$temp['Final-recipient']['type'] = trim($arr[0]);
             //$temp['Final-recipient']['addr'] = trim($arr[1]);
-            $arr = explode (';', $temp['Original-recipient']);
+            $arr = isset($temp['Original-recipient']) ? explode (';', $temp['Original-recipient']) : array(null, null);
             $temp['Original-recipient']='';
             $temp['Original-recipient']['type'] = trim($arr[0]);
             $temp['Original-recipient']['addr'] = trim($arr[1]);
-            $arr = explode (';', $temp['Diagnostic-code']);
+            $arr = isset($temp['Diagnostic-code']) ? explode (';', $temp['Diagnostic-code']) : array(null, null);
             $temp['Diagnostic-code']='';
             $temp['Diagnostic-code']['type'] = trim($arr[0]);
             $temp['Diagnostic-code']['text'] = trim($arr[1]);
@@ -454,7 +455,7 @@ class BounceHandler{
             // but the diagnostic code is a temporary failure.  So we will assert the most general
             // temporary failure in this case.
             $ddc=''; $judgement='';
-            $ddc = $this->decode_diagnostic_code($temp['Diagnostic-code']['text']);
+            $ddc = $this->decode_diagnostic_code(isset($temp['Diagnostic-code']['text']) ? $temp['Diagnostic-code']['text'] : null);
             $judgement = $this->get_action_from_status_code($ddc);
             if($judgement == 'transient'){
                 if(stristr($temp['Action'],'failed')!==FALSE){
@@ -582,7 +583,7 @@ class BounceHandler{
     function is_a_bounce(){
         if(preg_match("/(mail delivery failed|failure notice|warning: message|delivery status notif|delivery failure|delivery problem|spam eater|returned mail|undeliverable|returned mail|delivery errors|mail status report|mail system error|failure delivery|delivery notification|delivery has failed|undelivered mail|returned email|returning message to sender|returned to sender|message delayed|mdaemon notification|mailserver notification|mail delivery system|nondeliverable mail|mail transaction failed)|auto.{0,20}reply|vacation|(out|away|on holiday).*office/i", $this->head_hash['Subject'])) return true;
 
-         if(preg_match('/auto_reply/',$this->head_hash['Precedence'])) return true;
+         if(isset($this->head_hash['Precedence']) && preg_match('/auto_reply/',$this->head_hash['Precedence'])) return true;
 
         if(preg_match("/^(postmaster|mailer-daemon)\@?/i", $this->head_hash['From'])) return true;
         return false;
@@ -600,8 +601,8 @@ class BounceHandler{
 
     // these functions are for feedback loops
     function is_an_ARF(){
-        if(preg_match('/feedback-report/',$this->head_hash['Content-type']['report-type'])) return true;
-        if(preg_match('/scomp/',$this->head_hash['X-loop'])) return true;
+        if(isset($this->head_hash['Content-type']['report-type']) && preg_match('/feedback-report/',$this->head_hash['Content-type']['report-type'])) return true;
+        if(isset($this->head_hash['X-loop']) && preg_match('/scomp/',$this->head_hash['X-loop'])) return true;
         if(isset($this->head_hash['X-hmxmroriginalrecipient']) || isset($this->first_body_hash['X-hmxmroriginalrecipient']) )  {
             $this->is_hotmail_fbl = true;
             return true;
